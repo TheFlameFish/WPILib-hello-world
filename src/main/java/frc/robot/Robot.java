@@ -7,13 +7,14 @@
 
 package frc.robot;
 
-import edu.wpi.first.wpilibj.XboxController;
 import org.littletonrobotics.junction.LogFileUtil;
 import org.littletonrobotics.junction.LoggedRobot;
 import org.littletonrobotics.junction.Logger;
 import org.littletonrobotics.junction.networktables.NT4Publisher;
 import org.littletonrobotics.junction.wpilog.WPILOGReader;
 import org.littletonrobotics.junction.wpilog.WPILOGWriter;
+
+import edu.wpi.first.wpilibj.XboxController;
 
 /**
  * The VM is configured to automatically run this class, and to call the functions corresponding to
@@ -22,7 +23,30 @@ import org.littletonrobotics.junction.wpilog.WPILOGWriter;
  * project.
  */
 public class Robot extends LoggedRobot {
+  private enum ArmState {
+    GRABBING(80, 0.5, 20),
+    STANDBY(0, 0, 0),
+    PLACING(10, 2, 90);
+
+    public final double pivotAngleDeg;
+    public final double elevatorHeightM;
+    public final double wristPitchDeg;
+
+    private ArmState(double pivotDegrees, double elevatorMeters, double wristDegrees) {
+      this.pivotAngleDeg = pivotDegrees;
+      this.elevatorHeightM = elevatorMeters;
+      this.wristPitchDeg = wristDegrees;
+    }
+  }
+
+  /** The arm state we are at or are changing from. */
+  private ArmState previousArmState = ArmState.STANDBY;
+  /** The arm state we are switching to. */
+  private ArmState targetArmState = ArmState.STANDBY;
+
   private XboxController driverController = new XboxController(0);
+
+  /* We'd define the subsystems (pivot, elevator, wrist) here as well */
 
   public Robot() {
     // Record metadata
@@ -65,51 +89,86 @@ public class Robot extends LoggedRobot {
     Logger.start();
   }
 
-  /** This function is called periodically during all modes. */
-  @Override
-  public void robotPeriodic() {}
-
-  /** This function is called once when the robot is disabled. */
-  @Override
-  public void disabledInit() {}
-
-  /** This function is called periodically when disabled. */
-  @Override
-  public void disabledPeriodic() {}
-
-  /** This autonomous runs the autonomous command selected by your {@link RobotContainer} class. */
-  @Override
-  public void autonomousInit() {}
-
-  /** This function is called periodically during autonomous. */
-  @Override
-  public void autonomousPeriodic() {}
-
-  /** This function is called once when teleop is enabled. */
-  @Override
-  public void teleopInit() {}
-
   /** This function is called periodically during operator control. */
   @Override
   public void teleopPeriodic() {
-    if (driverController.getAButtonPressed() == true) {
-      System.out.println("Hello, world!");
+    drivetrain.driveManual(driverController.getLeftY(), driverController.getRightY());
+
+    if (driverController.getAButtonPressed()) {
+      targetArmState = ArmState.PLACING;
+    } else if (driverController.getBButtonPressed()) {
+      targetArmState = ArmState.STANDBY;
+    } else if (driverController.getYButtonPressed()) {
+      targetArmState = ArmState.PLACING;
+    }
+
+    moveArm();
+  }
+
+  /** Run once per periodic loop. Moves the arm to {@link #targetArmState}. */
+  private void moveArm() {
+    if (previousArmState != targetArmState) {
+      if (
+        // If we're moving the arm from standby to an outward pose
+        previousArmState == ArmState.STANDBY && targetArmState == ArmState.GRABBING
+        ||
+        previousArmState == ArmState.STANDBY && targetArmState == ArmState.PLACING
+      ) {
+        moveArmOutToState(targetArmState);
+      } else if (
+        // If we're moving the arm from an outward pose to standby
+        previousArmState == ArmState.GRABBING && targetArmState == ArmState.STANDBY
+        ||
+        previousArmState == ArmState.PLACING && targetArmState == ArmState.STANDBY
+        // If we're moving the arm from an outward pose to another outward pose,
+        // we need to move to standby in between.
+        ||
+        previousArmState == ArmState.PLACING && targetArmState == ArmState.GRABBING
+        ||
+        previousArmState == ArmState.GRABBING && targetArmState == ArmState.PLACING
+      ) {
+        moveArmInToState(ArmState.STANDBY);
+      }
     }
   }
 
-  /** This function is called once when test mode is enabled. */
-  @Override
-  public void testInit() {}
+  /**
+   * Moves the arm to the given state in the order of pivot, elevator, wrist
+   * @return Whether or not we've reached the given state.
+   */
+  private boolean moveArmOutToState(ArmState state) {
+    pivot.setTarget(state.pivotAngleDeg);
+    if (pivot.withinTolerance()) {
+      elevator.setTarget(state.elevatorHeightM);
+      if (elevator.withinTolerance()) {
+        wrist.setTarget(state.wristPitchDeg);
+        if (wrist.withinTolerance()) {
+          previousArmState = state;
+          return true;
+        };
+      }
+    }
+    
+    return false;
+  }
 
-  /** This function is called periodically during test mode. */
-  @Override
-  public void testPeriodic() {}
+  /**
+   * Moves the arm to the given state in the order of wrist, elevator, pivot.
+   * @return Whether or not we've reached the given state.
+   */
+  private boolean moveArmInToState(ArmState state) {
+    wrist.setTarget(state.wristPitchDeg);
+    if (wrist.withinTolerance()) {
+      elevator.setTarget(state.elevatorHeightM);
+      if (elevator.withinTolerance()) {
+        pivot.setTarget(state.pivotAngleDeg);
+        if (pivot.withinTolerance()) {
+          previousArmState = state;
+          return true;
+        }
+      }
+    }
 
-  /** This function is called once when the robot is first started up. */
-  @Override
-  public void simulationInit() {}
-
-  /** This function is called periodically whilst in simulation. */
-  @Override
-  public void simulationPeriodic() {}
+    return false;
+  }
 }
